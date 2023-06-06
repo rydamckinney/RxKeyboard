@@ -15,6 +15,42 @@
 import Foundation
 import Combine
 import RxSwift
+import SwiftUI
+
+
+public extension View {
+    
+    func keyboardBottomPadding() -> some View {
+        self
+            .modifier(KeyboardHeightPaddingModifier())
+        
+    }
+    
+}
+
+public struct KeyboardHeightPaddingModifier: ViewModifier {
+    
+    let heightPublisher: KeyboardHeightPublisher
+    
+    public init() {
+        self.heightPublisher = KeyboardHeightPublisher()
+    }
+    
+    @State var kbHeight: CGFloat = .zero
+    
+    public func body(content: Content) -> some View {
+        content
+            .ignoresSafeArea(.keyboard, edges: .all)
+            .padding(.bottom, kbHeight)
+            .ignoresSafeArea(.keyboard, edges: .all)
+            .onReceive(heightPublisher.$keyboardHeight) { newKbHeight in
+//                print("[KeyboardHeightPaddingModifier] New keyboard height: \(newKbHeight)")
+                kbHeight = newKbHeight
+            }
+    }
+    
+}
+
 
 #if os(iOS)
 @available(iOS 13.0, *)
@@ -26,7 +62,7 @@ public class KeyboardHeightPublisher: ObservableObject {
     public init() {
         RxKeyboard.instance.visibleHeight
             .drive(onNext: { [weak self] height in
-                print("Keyboard height: \(height)")
+//                print("Keyboard height: \(height)")
                 self?.keyboardHeight = height
             })
             .disposed(by: disposeBag)

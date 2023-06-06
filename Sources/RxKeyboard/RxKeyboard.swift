@@ -126,11 +126,17 @@ public class RxKeyboard: NSObject, RxKeyboardType {
     self.panRecognizer.delegate = self
     self.panRecognizer.maximumNumberOfTouches = 1
     
-    UIApplication.rx.didFinishLaunching // when RxKeyboard is initialized before UIApplication.window is created
-      .subscribe(onNext: { _ in
-        UIApplication.shared.windows.first?.addGestureRecognizer(self.panRecognizer)
-      })
-      .disposed(by: self.disposeBag)
+      if let window = UIApplication.shared.windows.first(where: { (window) -> Bool in window.isKeyWindow}) {
+          print("RxKeyboard adding the panrecogin")
+          window.addGestureRecognizer(self.panRecognizer)
+      } else  {
+          UIApplication.rx.didFinishLaunching // when RxKeyboard is initialized before UIApplication.window is created
+              .subscribe(onNext: { _ in
+                  UIApplication.shared.windows.first?.addGestureRecognizer(self.panRecognizer)
+              })
+              .disposed(by: self.disposeBag)
+      }
+      
   }
 
 }
@@ -144,9 +150,17 @@ extension RxKeyboard: UIGestureRecognizerDelegate {
     _ gestureRecognizer: UIGestureRecognizer,
     shouldReceive touch: UITouch
   ) -> Bool {
+//      print("RxKeyboard gestureRecognizer: shouldReceive")
+    
     let point = touch.location(in: gestureRecognizer.view)
     var view = gestureRecognizer.view?.hitTest(point, with: nil)
     while let candidate = view {
+        if let sView = candidate as? UIScrollView,
+           case .interactiveWithAccessory = sView.keyboardDismissMode {
+//            print("RxKeyboard dismiss mode: \(sView.keyboardDismissMode)")
+            return true
+        }
+        
       if let scrollView = candidate as? UIScrollView,
         case .interactive = scrollView.keyboardDismissMode {
         return true
