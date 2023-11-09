@@ -18,25 +18,90 @@ import RxSwift
 import SwiftUI
 
 
-public extension View {
+#if canImport(UIKit)
+import UIKit
+public typealias Rx_PlatformScrollView = UIScrollView
+#elseif canImport(AppKit)
+import AppKit
+public typealias Rx_PlatformScrollView = NSScrollView
+#endif
+
+#if canImport(UIKit)
+public struct RxKeyboardHolder {
     
-    func keyboardBottomPadding(addlPadding: Binding<CGFloat>? = nil,
-                               ignoreAllBottomSafeArea: Bool = false,
-                               includeBottomSafeAreaPadding: Bool = false) -> some View {
-        self
-            .modifier(KeyboardHeightPaddingModifier(addlPadding: addlPadding,
-                                                    ignoreBottomSafeAreaRegion: ignoreAllBottomSafeArea ? .all : .keyboard,
-                                                    includeBottomSafeAreaPadding: includeBottomSafeAreaPadding))
+    let disposeBag = DisposeBag()
+    public init() { }
+    
+    public func makeScrollViewInsetKbAware(_ scrollView: Rx_PlatformScrollView) {
+        RxKeyboard.instance.visibleHeight
+            .drive(onNext: { [scrollView] keyboardVisibleHeight in
+                print("[RxKeyboardHolder] \n inset.bottom \(scrollView.contentInset.bottom) \n contentOffset.y \(scrollView.contentOffset.y) with keyboardVisibleHeight: \(keyboardVisibleHeight)")
+                UIView.animate(withDuration: 0) {
+                    scrollView.contentInset.bottom = keyboardVisibleHeight
+                    scrollView.scrollIndicatorInsets.bottom = scrollView.contentInset.bottom
+                    scrollView.layoutIfNeeded()
+                }
+                print("[RxKeyboardHolder] bottom contentInset \(scrollView.contentInset.bottom) after setting")
+            })
+            .disposed(by: disposeBag)
+        
+        RxKeyboard.instance.willShowVisibleHeight
+          .drive(onNext: { keyboardVisibleHeight in
+            scrollView.contentOffset.y += keyboardVisibleHeight
+          })
+          .disposed(by: self.disposeBag)
+        
     }
     
+}
+#endif
+
+public class KeyboardPaddingHolder: ObservableObject {
+
+    @Published public var aggHeight: CGFloat
+    
+    
+    public init(_ initialHeight: CGFloat = 0) {
+        self.aggHeight = initialHeight
+    }
+    
+    public var heightBinding: Binding<CGFloat> {
+        Binding<CGFloat>(
+            get: { [weak self] in
+                self?.aggHeight ?? 0
+            },
+            set: { [weak self] in
+//                print("KeyboardPaddingHolder set heightBinding: \($0) previous: \(self?.aggHeight ?? -1)")
+                guard let self = self else { return }
+                if self.aggHeight != $0 {
+                    self.aggHeight = $0
+                }
+                
+//                self?.aggHeight = $0
+            }
+        )
+    }
+    
+}
+
+
+public extension View {
+    
     
     func keyboardBottomPadding(addlPadding: Binding<CGFloat>? = nil,
+                               paddingHolder: KeyboardPaddingHolder? = nil,
                                ignoreBottomSafeAreaRegions: SafeAreaRegions? = nil,
-                               includeBottomSafeAreaPadding: Bool = false) -> some View {
+                               includeBottomSafeAreaPadding: Bool = false,
+                               paddingType: KeyboardHeightPaddingModifier.PaddingType = .contentMarginIfPossible) -> some View {
         self
             .modifier(KeyboardHeightPaddingModifier(addlPadding: addlPadding,
+                                                    paddingHolder: paddingHolder,
                                                     ignoreBottomSafeAreaRegion: ignoreBottomSafeAreaRegions,
-                                                    includeBottomSafeAreaPadding: includeBottomSafeAreaPadding))
+                                                    includeBottomSafeAreaPadding: includeBottomSafeAreaPadding,
+                                                    paddingType: paddingType
+                                                   
+                                                   )
+            )
     }
 }
 
@@ -49,7 +114,9 @@ public struct KeyboardPaddingSpacer: View {
     public var body: some View {
         Spacer()
             .frame(height: 1)
-            .keyboardBottomPadding(ignoreAllBottomSafeArea: false)
+            .keyboardBottomPadding(
+                ignoreBottomSafeAreaRegions: .keyboard
+            )
     }
     
 }
@@ -57,21 +124,36 @@ public struct KeyboardPaddingSpacer: View {
 
 
 public struct KeyboardHeightPaddingModifier: ViewModifier {
+    public enum PaddingType {
+        case padding
+        case contentMarginIfPossible //falls back to padding
+        case offset //uses voffset instead
+    }
     
     let heightPublisher: KeyboardHeightPublisher
     let ignoreAllBottomSafeArea: Bool
     let includeBottomSafeAreaPadding: Bool
     
+    @ObservedObject var paddingHolder: KeyboardPaddingHolder
+    
     @Binding var addlPadding: CGFloat
     
     let btmSafeAreaToIgnore: SafeAreaRegions?
+    let paddingType: PaddingType
     
     public init(addlPadding: Binding<CGFloat>? = nil,
+                paddingHolder: KeyboardPaddingHolder? = nil,
                 ignoreBottomSafeAreaRegion: SafeAreaRegions? = nil,
-                includeBottomSafeAreaPadding: Bool = true
+                includeBottomSafeAreaPadding: Bool = true,
+                paddingType: PaddingType = .contentMarginIfPossible
     ) {
         self.heightPublisher = KeyboardHeightPublisher()
         
+        self.paddingHolder = paddingHolder ?? KeyboardPaddingHolder()
+        
+        
+        
+        self.paddingType = paddingType
         if let additionalPadding = addlPadding {
             self._addlPadding = additionalPadding
         } else {
@@ -80,7 +162,6 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
         self.btmSafeAreaToIgnore = ignoreBottomSafeAreaRegion
         
         self.includeBottomSafeAreaPadding = includeBottomSafeAreaPadding
-        
         
         self.ignoreAllBottomSafeArea = false
     }
@@ -116,12 +197,45 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
         self.includeBottomSafeAreaPadding ? safeAreaInsets.bottom : 0
     }
     
+//    var providedAdditionalPadding: CGFloat {
+//        
+//    }
+    
+    var resolvedBottomPadding: CGFloat {
+//        let safeAreaInsetAdjustment = safeAreaInsets.bottom
+        let safeAreaInsetAdjustment: CGFloat = 0
+
+        let resolved  = max(0, kbHeight + addlPadding + paddingHolder.aggHeight + safeAreaInsetAdjustment)
+            print("[KeyboardHeightPaddingModifier] resolvedBottomPadding: \(resolved) and isFocused: \(isFocused)")
+        return resolved
+    }
+    @Environment(\.isFocused) var isFocused
+    
+    @ViewBuilder
+    func bodyContentWithPadding(content: Content) -> some View {
+        if paddingType == .offset {
+            content
+                .offset(y: -resolvedBottomPadding)
+        } else if #available(iOS 17.0, macOS 14.0, *),
+           paddingType == .contentMarginIfPossible {
+            content
+                .contentMargins(.bottom, resolvedBottomPadding)
+//                .contentMargins(.bottom, resolvedBottomPadding, for: .scrollContent)
+//                .contentMargins(.bottom, resolvedBottomPadding, for: .scrollIndicators)
+
+        } else {
+            content
+                .padding(.bottom, resolvedBottomPadding)
+
+        }
+        
+    }
     
     public func body(content: Content) -> some View {
-        content
-            .padding(.bottom, max(0, kbHeight + addlPadding - safeAreaInsets.bottom))
-        ///BELOW WORKS
-        //            .padding(.bottom, kbHeight + addlPadding + containerSafeAreaPadding)
+        bodyContentWithPadding(content: content)
+        
+//        content
+//            .padding(.bottom, max(0, kbHeight + addlPadding - safeAreaInsets.bottom))
             .onReceive(heightPublisher.$keyboardHeight) { newKbHeight in
 //                print("[KEyboardHEightPaddingModifier] Keyboard height: old: \(self.kbHeight) new: \(newKbHeight)")
                 
@@ -135,17 +249,8 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
                 } else {
                     kbHeight = newKbHeight
                 }
-//                if kbHeight == 0 || newKbHeight == 0 {
-//                    withAnimation(.easeOut(duration: 0.16)) {
-//                        kbHeight = newKbHeight
-//                    }
-//                } else {
-//                    kbHeight = newKbHeight
-//                }
             }
             .ignoresSafeArea(self.regionToIgnore, edges: self.edgesToIgnore)
-
-        
     }
     
 }
@@ -186,7 +291,6 @@ public struct KeyboardPinnedInputModifier: ViewModifier {
                 
                 // calculate the delta
                 let delta = abs(kbHeight - newKbHeight)
-
                 if delta > 100 {
                     withAnimation(.easeOut(duration: 0.16)) {
                         kbHeight = newKbHeight
