@@ -87,21 +87,27 @@ public class KeyboardPaddingHolder: ObservableObject {
 
 public extension View {
     
-    
+    @ViewBuilder
     func keyboardBottomPadding(addlPadding: Binding<CGFloat>? = nil,
                                paddingHolder: KeyboardPaddingHolder? = nil,
                                ignoreBottomSafeAreaRegions: SafeAreaRegions? = nil,
                                includeBottomSafeAreaPadding: Bool = false,
-                               paddingType: KeyboardHeightPaddingModifier.PaddingType = .contentMarginIfPossible) -> some View {
-        self
-            .modifier(KeyboardHeightPaddingModifier(addlPadding: addlPadding,
-                                                    paddingHolder: paddingHolder,
-                                                    ignoreBottomSafeAreaRegion: ignoreBottomSafeAreaRegions,
-                                                    includeBottomSafeAreaPadding: includeBottomSafeAreaPadding,
-                                                    paddingType: paddingType
-                                                   
-                                                   )
-            )
+                               paddingType: KeyboardHeightPaddingModifier.PaddingType = .contentMarginIfPossible,
+                               skipApply: Bool = false) -> some View {
+        if skipApply {
+            self
+        } else {
+            self
+                .modifier(KeyboardHeightPaddingModifier(addlPadding: addlPadding,
+                                                        paddingHolder: paddingHolder,
+                                                        ignoreBottomSafeAreaRegion: ignoreBottomSafeAreaRegions,
+                                                        includeBottomSafeAreaPadding: includeBottomSafeAreaPadding,
+                                                        paddingType: paddingType
+                                                        
+                                                       )
+                )
+            
+        }
     }
 }
 
@@ -206,10 +212,10 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
         let safeAreaInsetAdjustment: CGFloat = 0
 
         let resolved  = max(0, kbHeight + addlPadding + paddingHolder.aggHeight + safeAreaInsetAdjustment)
-            print("[KeyboardHeightPaddingModifier] resolvedBottomPadding: \(resolved) and isFocused: \(isFocused)")
+            print("[KeyboardHeightPaddingModifier] resolvedBottomPadding: \(resolved) ")
         return resolved
     }
-    @Environment(\.isFocused) var isFocused
+//    @Environment(\.isFocused) var isFocused
     
     @ViewBuilder
     func bodyContentWithPadding(content: Content) -> some View {
@@ -232,6 +238,9 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
     }
     
     public func body(content: Content) -> some View {
+        
+        let _ = Self._printChanges()
+        
         bodyContentWithPadding(content: content)
         
 //        content
@@ -256,19 +265,33 @@ public struct KeyboardHeightPaddingModifier: ViewModifier {
 }
 
 public extension View {
-    func setAsPinnedKeyboardInput(_ addlPadding: Binding<CGFloat>? = nil) -> some View {
-        self.modifier(KeyboardPinnedInputModifier(addlPadding: addlPadding))
+    func setAsPinnedKeyboardInput(_ addlPadding: Binding<CGFloat>? = nil, containerSafeAreaHandling: KeyboardPinnedInputModifier.ContainerSafeAreaHandling = .subtract
+    ) -> some View {
+        self.modifier(KeyboardPinnedInputModifier(
+            addlPadding: addlPadding, containerSafeAreaHandling: containerSafeAreaHandling)
+        )
     }
 }
 public struct KeyboardPinnedInputModifier: ViewModifier {
+    public enum ContainerSafeAreaHandling {
+        case add
+        case subtract
+        case nothing
+    }
     
     let heightPublisher: KeyboardHeightPublisher
     
     @Binding var addlPadding: CGFloat
-        
-    public init(addlPadding: Binding<CGFloat>? = nil
+    
+    let containerSafeAreaHandling: ContainerSafeAreaHandling
+    
+    public init(addlPadding: Binding<CGFloat>? = nil,
+                containerSafeAreaHandling: ContainerSafeAreaHandling
     ) {
         self.heightPublisher = KeyboardHeightPublisher()
+        
+        self.containerSafeAreaHandling = containerSafeAreaHandling
+        
         if let additionalPadding = addlPadding {
             self._addlPadding = additionalPadding
         } else {
@@ -279,9 +302,22 @@ public struct KeyboardPinnedInputModifier: ViewModifier {
     @State var kbHeight: CGFloat = .zero
     @Environment(\.safeAreaInsets) var safeAreaInsets: EdgeInsets
     
+    var resolvedContainerSafeAreaAugmentation: CGFloat {
+        switch self.containerSafeAreaHandling {
+        case .add:
+            return safeAreaInsets.bottom
+        case .subtract:
+            return -safeAreaInsets.bottom
+        case .nothing:
+            return 0
+        }
+    }
+    
     public func body(content: Content) -> some View {
+        let _ = Self._printChanges()
+
         content
-            .padding(.bottom, max(0, kbHeight + addlPadding - safeAreaInsets.bottom))
+            .padding(.bottom, max(0, kbHeight + addlPadding + resolvedContainerSafeAreaAugmentation))
             .onReceive(heightPublisher.$keyboardHeight) { newKbHeight in
 //                print("[KeyboardPinnedInputModifier] Keyboard height: old: \(self.kbHeight) new: \(newKbHeight)")
                 if self.kbHeight == newKbHeight {
@@ -316,6 +352,7 @@ public struct KeyboardPinnedInputModifier: ViewModifier {
 #if os(iOS)
 @available(iOS 13.0, *)
 public class KeyboardHeightPublisher: ObservableObject {
+    
     private let disposeBag = DisposeBag()
     
     @Published public var keyboardHeight: CGFloat = 0
@@ -323,12 +360,64 @@ public class KeyboardHeightPublisher: ObservableObject {
     public init() {
         RxKeyboard.instance.visibleHeight
             .drive(onNext: { [weak self] height in
-//                print("Keyboard height: \(height)")
+                print("Keyboard height: \(height)")
                 self?.keyboardHeight = height
             })
             .disposed(by: disposeBag)
     }
+    public static var shared = KeyboardHeightPublisher()
+    
 }
+
+@available(iOS 13.0, *)
+public class KeyboardScrollViewManager {
+    
+    weak var scrollView: UIScrollView?
+    
+    private let disposeBag = DisposeBag()
+
+    public init() {
+        
+    }
+    
+    public func setScrollView(_ scrollView: UIScrollView) {
+        
+        self.scrollView = scrollView
+        print("KeyboardScrollViewManager - existing scrollView contentInset: \(scrollView.contentInset) contentOffset: \(scrollView.contentOffset)")
+        
+        self.setup()
+        
+    }
+    
+    private func setup() {
+        RxKeyboard.instance.visibleHeight
+          .drive(onNext: { [weak self] keyboardVisibleHeight in
+//            self.view.setNeedsLayout()
+              guard let self = self, let scrollView = self.scrollView else { return }
+//              scrollView.superview?.setNeedsLayout()
+            UIView.animate(withDuration: 0) {
+                print("Keyboard height: \(keyboardVisibleHeight)")
+                scrollView.contentInset.bottom = keyboardVisibleHeight // + self.messageInputBar.height
+                scrollView.scrollIndicatorInsets.bottom = scrollView.contentInset.bottom
+//              self.view.layoutIfNeeded()
+                print("KeyboardScrollViewManager - scrollView contentInset: \(scrollView.contentInset) contentOffset: \(scrollView.contentOffset)")
+//                scrollView.superview?.layoutIfNeeded()
+            }
+          })
+          .disposed(by: self.disposeBag)
+        
+        
+//        RxKeyboard.instance.willShowVisibleHeight
+//          .drive(onNext: { [weak self] keyboardVisibleHeight in
+//              guard let self = self, let scrollView = self.scrollView else { return }
+//              scrollView.contentOffset.y += keyboardVisibleHeight
+//          })
+//          .disposed(by: self.disposeBag)
+    }
+    
+    
+}
+
 
 #elseif os(macOS)
 public class KeyboardHeightPublisher: ObservableObject {

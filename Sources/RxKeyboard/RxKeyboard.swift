@@ -42,6 +42,9 @@ public class RxKeyboard: NSObject, RxKeyboardType {
   /// when changed keyboard show and hide.
   public let isHidden: Driver<Bool>
 
+    private var isHiddenObs: SharedSequence<DriverSharingStrategy, Bool>? = nil
+    private(set) public var isHiddenState: Bool = true
+    
   // MARK: Private
 
   private let disposeBag = DisposeBag()
@@ -70,8 +73,23 @@ public class RxKeyboard: NSObject, RxKeyboardType {
       }
       .filter { state in state.isShowing }
       .map { state in state.visibleHeight }
-    self.isHidden = self.visibleHeight.map({ $0 == 0.0 }).distinctUntilChanged()
+      
+      self.isHidden = self.visibleHeight.map({
+          $0 == 0.0
+      }).distinctUntilChanged()
+          
+          
     super.init()
+      
+      
+      self.isHiddenObs = self.isHidden
+          .do(onNext: { [weak self] isVisible in
+              debugPrint("RxKeyboard isHidden: \(isVisible)")
+                  // perform other side effect
+              self?.isHiddenState = isVisible
+          })
+          
+      
 
     // keyboard will change frame
     let willChangeFrame = NotificationCenter.default.rx.notification(keyboardWillChangeFrame)
@@ -127,7 +145,7 @@ public class RxKeyboard: NSObject, RxKeyboardType {
     self.panRecognizer.maximumNumberOfTouches = 1
     
       if let window = UIApplication.shared.windows.first(where: { (window) -> Bool in window.isKeyWindow}) {
-          print("RxKeyboard adding the panrecogin")
+          print("RxKeyboard adding the panrecognizer")
           window.addGestureRecognizer(self.panRecognizer)
       } else  {
           UIApplication.rx.didFinishLaunching // when RxKeyboard is initialized before UIApplication.window is created
